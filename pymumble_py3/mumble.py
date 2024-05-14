@@ -15,6 +15,7 @@ from . import blobs
 from . import commands
 from . import callbacks
 from . import tools
+from . import soundoutput
 
 from . import mumble_pb2
 
@@ -124,11 +125,7 @@ class Mumble(threading.Thread):
         self.users = users.Users(self, self.callbacks)  # contains the server's connected users information
         self.channels = channels.Channels(self, self.callbacks)  # contains the server's channels information
         self.blobs = blobs.Blobs(self)  # manage the blob objects
-        if self.receive_sound:
-            from . import soundoutput
-            self.sound_output = soundoutput.SoundOutput(self, PYMUMBLE_AUDIO_PER_PACKET, self.bandwidth, stereo=self.stereo, opus_profile=self.__opus_profile)  # manage the outgoing sounds
-        else:
-            self.sound_output = None
+        self.sound_output = soundoutput.SoundOutput(self, PYMUMBLE_AUDIO_PER_PACKET, self.bandwidth, stereo=self.stereo, opus_profile=self.__opus_profile)  # manage the outgoing sounds
         self.commands = commands.Commands()  # manage commands sent between the main and the mumble threads
 
         self.receive_buffer = bytes()  # initialize the control connection input buffer
@@ -235,8 +232,7 @@ class Mumble(threading.Thread):
                 while self.commands.is_cmd():
                     self.treat_command(self.commands.pop_cmd())  # send the commands coming from the application to the server
 
-                if self.sound_output:
-                    self.sound_output.send_audio()  # send outgoing audio if available
+                self.sound_output.send_audio()  # send outgoing audio if available
 
             (rlist, wlist, xlist) = select.select([self.control_socket], [], [self.control_socket], self.loop_rate)  # wait for a socket activity
 
@@ -321,8 +317,7 @@ class Mumble(threading.Thread):
         """Dispatch control messages based on their type"""
         self.Log.debug("dispatch control message")
         if type == PYMUMBLE_MSG_TYPES_UDPTUNNEL:  # audio encapsulated in control message
-            if self.sound_output:
-                self.sound_received(message)
+            self.sound_received(message)
 
         elif type == PYMUMBLE_MSG_TYPES_VERSION:
             mess = mumble_pb2.Version()
@@ -457,8 +452,8 @@ class Mumble(threading.Thread):
             mess = mumble_pb2.CodecVersion()
             mess.ParseFromString(message)
             self.Log.debug("message: CodecVersion : %s", mess)
-            if self.sound_output:
-                self.sound_output.set_default_codec(mess)
+
+            self.sound_output.set_default_codec(mess)
 
         elif type == PYMUMBLE_MSG_TYPES_USERSTATS:
             mess = mumble_pb2.UserStats()
@@ -492,8 +487,7 @@ class Mumble(threading.Thread):
         else:
             self.bandwidth = bandwidth
 
-        if self.sound_output:
-            self.sound_output.set_bandwidth(self.bandwidth)  # communicate the update to the outgoing audio manager
+        self.sound_output.set_bandwidth(self.bandwidth)  # communicate the update to the outgoing audio manager
 
     def sound_received(self, message):
         """Manage a received sound message"""
@@ -539,7 +533,7 @@ class Mumble(threading.Thread):
 
             self.Log.debug("Audio frame : time:%f, last:%s, size:%i, type:%i, target:%i, pos:%i", time.time(), str(terminator), size, type, target, pos - 1)
 
-            if size > 0:
+            if size > 0 and self.receive_sound:  # if audio must be treated
                 try:
                     newsound = self.users[session.value].sound.add(message[pos:pos + size],
                                                                    sequence.value,
